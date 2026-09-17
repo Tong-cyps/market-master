@@ -520,7 +520,7 @@ var divTimer = DIV_TICKS;
 var marketVol = 1.45;
 // Harder game: higher vol, longer trends, occasional extreme candles (works on loaded saves too)
 var DIFF_VOL = 3.1;
-var DIFF_TREND = 3.8;
+var DIFF_TREND = 1.6; // was 3.8 — long AR trends caused marathon one-way candles
 var extremeCool = 0;
 var FICTIONAL_YEAR = 1929;
 var sectorMomentum = {};
@@ -529,14 +529,14 @@ var ROTATE_TICKS = 600;
 var rotateTimer = ROTATE_TICKS;
 // Daily market narrative theme (not UI shop theme)
 var DAY_THEMES = [
-  {id:'tech_strong', zh:'科技偏强', en:'Tech strength', hot:['科技','半导体','新能源'], cold:['银行','公用事业','地产'], bias:0.00095},
-  {id:'risk_off', zh:'风险偏好下降', en:'Risk appetite down', hot:['公用事业','银行','食品饮料','贵金属'], cold:['虚拟货币','娱乐游戏','半导体'], bias:0.00095},
-  {id:'energy_warm', zh:'能源回暖', en:'Energy rebound', hot:['能源','新能源','工业'], cold:['消费','零售','电商'], bias:0.0009},
-  {id:'fin_pressure', zh:'金融承压', en:'Financials under pressure', hot:['科技','消费','医药'], cold:['金融','银行','地产'], bias:0.0009},
-  {id:'consumer_up', zh:'消费回暖', en:'Consumer rebound', hot:['消费','食品饮料','零售','电商'], cold:['能源','军工'], bias:0.00085},
-  {id:'risk_on', zh:'风险偏好上升', en:'Risk-on', hot:['虚拟货币','半导体','娱乐游戏','新能源'], cold:['公用事业','银行'], bias:0.00095},
-  {id:'defense_bid', zh:'军工活跃', en:'Defense bid', hot:['军工','工业','通信'], cold:['地产','零售'], bias:0.00085},
-  {id:'health_strong', zh:'医药偏强', en:'Healthcare bid', hot:['医药','生物科技'], cold:['能源','航空'], bias:0.0009}
+  {id:'tech_strong', zh:'科技偏强', en:'Tech strength', hot:['科技','半导体','新能源'], cold:['银行','公用事业','地产'], bias:0.00018},
+  {id:'risk_off', zh:'风险偏好下降', en:'Risk appetite down', hot:['公用事业','银行','食品饮料','贵金属'], cold:['虚拟货币','娱乐游戏','半导体'], bias:0.00018},
+  {id:'energy_warm', zh:'能源回暖', en:'Energy rebound', hot:['能源','新能源','工业'], cold:['消费','零售','电商'], bias:0.00017},
+  {id:'fin_pressure', zh:'金融承压', en:'Financials under pressure', hot:['科技','消费','医药'], cold:['金融','银行','地产'], bias:0.00017},
+  {id:'consumer_up', zh:'消费回暖', en:'Consumer rebound', hot:['消费','食品饮料','零售','电商'], cold:['能源','军工'], bias:0.00016},
+  {id:'risk_on', zh:'风险偏好上升', en:'Risk-on', hot:['虚拟货币','半导体','娱乐游戏','新能源'], cold:['公用事业','银行'], bias:0.00018},
+  {id:'defense_bid', zh:'军工活跃', en:'Defense bid', hot:['军工','工业','通信'], cold:['地产','零售'], bias:0.00016},
+  {id:'health_strong', zh:'医药偏强', en:'Healthcare bid', hot:['医药','生物科技'], cold:['能源','航空'], bias:0.00017}
 ];
 var dayThemeId = null;
 var dayThemeDay = -1;
@@ -832,7 +832,7 @@ var stocks = rawStocks.map(function(r, i){
   var drift = (Math.random()-0.5)*0.000008;
   var eps = r[2] / (sectorPE[r[1]] || 20);
   var divYield = sectorDiv[r[1]] || 0.01;
-  return { id:'S'+(i+1), name:r[0], sector:r[1], basePrice:r[2], price:r[2], drift:drift, vol:vol, eps:eps, divYield:divYield, hist:[], nextEarnings:0, trend:0, trendVol:vol*0.14, shortMean:r[2], meanRev:0.0016 };
+  return { id:'S'+(i+1), name:r[0], sector:r[1], basePrice:r[2], price:r[2], drift:drift, vol:vol, eps:eps, divYield:divYield, hist:[], nextEarnings:0, trend:0, trendVol:vol*0.14, shortMean:r[2], meanRev:0.0032 };
 });
 
 function $(id){ return document.getElementById(id); }
@@ -874,10 +874,10 @@ function getStock(id){
 function stepStock(s, shock){
   if(s.sector==='指数') return;
   var oldP = s.price;
-  s.trend = s.trend * 0.991 + (s.trendVol || 0) * DIFF_TREND * randn();
+  s.trend = s.trend * 0.94 + (s.trendVol || 0) * DIFF_TREND * randn(); // was 0.991 — shorter half-life so bars flip
   s.shortMean = s.shortMean * 0.997 + s.price * 0.003;
   var meanRev = ((s.shortMean - s.price) / s.price) * s.meanRev;
-  var baseRev = ((s.basePrice - s.price) / s.price) * 0.00035;
+  var baseRev = ((s.basePrice - s.price) / s.price) * 0.00055;
   var beginner = equityHist.length < 25;
   // Knife3 hook: +sentimentDrift (from news sentiment, subtle — not a difficulty spike)
   var ret = s.drift + ((s.trend + meanRev*modeMeanRev + s.vol*DIFF_VOL*randn()) * marketVol * (beginner?0.88:1)) + baseRev + modeDrift + sentimentDrift + (sectorMomentum[s.sector]||0) + (shock||0) - marketDev * 0.0009;
@@ -1066,7 +1066,7 @@ function init(){
     sectorList = [];
     sectorMomentum = {};
     stocks.forEach(function(s){ if(sectorList.indexOf(s.sector)<0) sectorList.push(s.sector); });
-    sectorList.forEach(function(sec){ sectorMomentum[sec] = (Math.random()-0.5)*0.0008; });
+    sectorList.forEach(function(sec){ sectorMomentum[sec] = (Math.random()-0.5)*0.0002; });
     rotateTimer = ROTATE_TICKS;
     marketVol = 1.45;
     extremeCool = 0;
@@ -1155,14 +1155,15 @@ function getDayTheme(){
 function applyDayThemeBias(){
   var th = getDayTheme();
   if(!th) return;
-  var bias = th.bias || 0.0009;
+  // Mild theme edge (hot↑/cold↓ on average) — strong enough to feel, weak enough to chop both ways
+  var bias = th.bias || 0.00018;
   (th.hot||[]).forEach(function(sec){
     if(sectorList.indexOf(sec)<0) return;
-    sectorMomentum[sec] = bias + Math.random()*0.00025;
+    sectorMomentum[sec] = bias + Math.random()*0.00006;
   });
   (th.cold||[]).forEach(function(sec){
     if(sectorList.indexOf(sec)<0) return;
-    sectorMomentum[sec] = -bias - Math.random()*0.00025;
+    sectorMomentum[sec] = -bias - Math.random()*0.00006;
   });
 }
 /** Knife 2: only 3–5 theme sectors are tradeable. */
@@ -1401,7 +1402,7 @@ function tick(){
         var o = s.price;
         var n = Math.max(0.5, o*(1+g));
         s.price = n;
-        s.trend += g * 0.22;
+        s.trend += g * 0.08; // was 0.22 — avoid locking one-way after gaps
         s.hist.push({o:o, h:Math.max(o,n), l:Math.min(o,n), c:n, v:Math.round(5000+Math.random()*12000), ts:clockSeconds});
         if(s.hist.length>HIST_CAP) s.hist.shift();
       }
@@ -2218,7 +2219,7 @@ function renderMarketHtml(){
 }
 function rotateSectors(){
   sectorList.forEach(function(sec){
-    sectorMomentum[sec] = (Math.random()-0.5)*0.0012;
+    sectorMomentum[sec] = (Math.random()-0.5)*0.00028;
   });
   applyDayThemeBias();
   syncThemeSectorUI();
