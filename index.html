@@ -280,12 +280,7 @@ canvas#chart { height: calc(100vh - 188px); min-height: 440px; }
     </div>
     <div class="desk-meta">
       <span class="clock" id="clock"></span>
-      <div class="speed-row">
-        <span class="speed-label" data-i18n="speed">速度</span>
-        <button class="speed-btn active" data-speed="1">1x</button>
-        <button class="speed-btn" data-speed="2">2x</button>
-        <button class="speed-btn" data-speed="4">4x</button>
-      </div>
+      <div class="speed-row"><span class="speed-label">4x</span></div>
       <div class="brand-daily" id="brandDaily"></div>
       <div class="brand-pl" id="brandPl"></div>
       <div class="brand-points" id="brandPoints" onclick="openPointsShop()"></div>
@@ -704,7 +699,7 @@ var lastEodShare = '';
 var SECONDS_PER_DAY = 86400;
 var indexDayKey = -1;
 var indexDayPrevClose = 1000;
-var gameSpeed = 4;
+var gameSpeed = 4; // locked permanently
 var gameTimer = null;
 function assetFlag(sec){ if(sec==='虚拟货币')return 'crypto'; if(sec==='外汇')return 'forex'; if(sec==='贵金属')return 'metals'; return null; }
 function checkAchievements(){
@@ -1130,10 +1125,8 @@ function init(){
   normalizeHoldings();
   try { LANG = localStorage.getItem('mm_lang') || 'zh'; } catch(e){ LANG = 'zh'; }
   $('btnLang').textContent = (LANG==='en' ? '中文' : 'EN');
-  try { gameSpeed = parseInt(localStorage.getItem('mm_speed')||'4',10) || 4; } catch(e){ gameSpeed = 1; }
-  document.querySelectorAll('.speed-btn').forEach(function(b){
-    b.classList.toggle('active', parseInt(b.getAttribute('data-speed'),10) === gameSpeed);
-  });
+  gameSpeed = 4;
+  try { localStorage.setItem('mm_speed', '4'); } catch(e){}
   try { favs = JSON.parse(localStorage.getItem('mm_favs') || '{}'); } catch(e){ favs = {}; }
   try { openSectors = JSON.parse(localStorage.getItem('mm_open') || '{}'); } catch(e){ openSectors = {}; }
   $('qty').value = '10';
@@ -2544,12 +2537,10 @@ function startGame(){
   gameTimer = setInterval(tick, Math.max(125, Math.round(TICK_MS / gameSpeed)));
 }
 function setSpeed(s){
-  gameSpeed = s;
-  document.querySelectorAll('.speed-btn').forEach(function(b){
-    b.classList.toggle('active', parseInt(b.getAttribute('data-speed'),10) === gameSpeed);
-  });
+  // Speed locked at 4x — ignore UI/calls
+  gameSpeed = 4;
+  try { localStorage.setItem('mm_speed', '4'); } catch(e){}
   startGame();
-  try { localStorage.setItem('mm_speed', gameSpeed); } catch(e){}
 }
 function normalizeHoldings(){
   stocks.forEach(function(s){
@@ -2681,11 +2672,7 @@ document.querySelectorAll('.mode-btn').forEach(function(b){
     saveGame();
   });
 });
-document.querySelectorAll('.speed-btn').forEach(function(b){
-  b.addEventListener('click', function(){
-    setSpeed(parseInt(b.getAttribute('data-speed'),10));
-  });
-});
+/* speed locked at 4x — no buttons */
 $('btnReset').addEventListener('click', function(){
   if(confirm(t('reset_confirm'))){
     localStorage.removeItem('mm_save');
