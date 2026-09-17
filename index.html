@@ -1833,7 +1833,7 @@ function render(){
   ic.className = 'chg ' + (idxChg>=0?'up':'down');
   var iprev = $('indexPrev');
   if(iprev) iprev.textContent = (LANG==='en'?'Prev ':'昨收 ') + fmt(indexDayPrevClose);
-  $('clock').textContent = clockFull();
+  $('clock').textContent = clockStr(); // time-of-day only — no fictional 1929 date
   var rs = sectorList.slice().sort(function(a,b){ return sectorMomentum[b]-sectorMomentum[a]; });
   var hotTxt = rs.slice(0,2).map(function(x){ return sectName(x)+' '+fmt(sectorMomentum[x]*100,2)+'%'; }).join(' · ');
   var coldTxt = rs.slice(-2).reverse().map(function(x){ return sectName(x)+' '+fmt(sectorMomentum[x]*100,2)+'%'; }).join(' · ');
