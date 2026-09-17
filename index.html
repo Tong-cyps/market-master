@@ -280,7 +280,7 @@ canvas#chart { height: calc(100vh - 188px); min-height: 440px; }
     </div>
     <div class="desk-meta">
       <span class="clock" id="clock"></span>
-      <div class="speed-row"><span class="speed-label">4x</span></div>
+      <div class="speed-row"><span class="speed-label">2x</span></div>
       <div class="brand-daily" id="brandDaily"></div>
       <div class="brand-pl" id="brandPl"></div>
       <div class="brand-points" id="brandPoints" onclick="openPointsShop()"></div>
@@ -701,7 +701,9 @@ var lastEodShare = '';
 var SECONDS_PER_DAY = 86400;
 var indexDayKey = -1;
 var indexDayPrevClose = 1000;
-var gameSpeed = 4; // locked permanently
+var indexLevel = 1000; // displayed index (damped vs equal-weight basket)
+var INDEX_DAY_BETA = 0.30; // index day move ≈ 30% of raw equity-basket day move
+var gameSpeed = 2; // locked permanently
 var gameTimer = null;
 function assetFlag(sec){ if(sec==='虚拟货币')return 'crypto'; if(sec==='外汇')return 'forex'; if(sec==='贵金属')return 'metals'; return null; }
 function checkAchievements(){
@@ -902,7 +904,7 @@ function regeneratePathHist(){
   for(var i=0;i<INIT_HIST;i++){
     clockSeconds = savedClock - INIT_HIST + i;
     tickSectorMomentum();
-    marketDev = marketIndex()/1000 - 1;
+    marketDev = marketIndexRaw()/1000 - 1;
     stocks.forEach(function(s){ stepStock(s, 0); });
   }
   DIFF_VOL = _dv; DIFF_TREND = _dt; marketVol = _mv;
@@ -918,7 +920,7 @@ function stepStock(s, shock){
   var baseRev = ((s.basePrice - s.price) / s.price) * 0.0007;
   var beginner = equityHist.length < 25;
   // Knife3 hook: +sentimentDrift (subtle). Theme bias arrives via noisy sectorMomentum (not a sticky addend).
-  var ret = s.drift + ((s.trend + meanRev*modeMeanRev + s.vol*DIFF_VOL*randn()) * marketVol * (beginner?0.88:1)) + baseRev + modeDrift + sentimentDrift + (sectorMomentum[s.sector]||0) + (shock||0) - marketDev * 0.0009;
+  var ret = s.drift + ((s.trend + meanRev*modeMeanRev + s.vol*DIFF_VOL*randn()) * marketVol * (beginner?0.88:1)) + baseRev + modeDrift + sentimentDrift + (sectorMomentum[s.sector]||0) + (shock||0) - marketDev * 0.0016;
   // Hard fade after 4 same-sign 1s returns — kills marathon one-way ticks
   if(typeof s.signStreak !== 'number') s.signStreak = 0;
   if(ret > 0){ s.signStreak = s.signStreak > 0 ? s.signStreak + 1 : 1; }
@@ -1027,7 +1029,7 @@ function saveGame(){
       sectorMomentum:sectorMomentum, marketVol:marketVol, divTimer:divTimer, rotateTimer:rotateTimer,
       orderId:orderId, optId:optId, selected:selected, timeframeKey:timeframeKey,
       posMode:posMode, tradeMode:tradeMode, leverage:leverage, condType:condType, optType:optType, optExp:optExp,
-      crashTimer:crashTimer, crashDone:crashDone, realized:realized, equityHist:equityHist, achv:achv, unlockedAch:unlockedAch, purchased:purchased, activeTheme:activeTheme, watchLimit:watchLimit, tradeLog:tradeLog, marketMode:marketMode, dayStartAssets:dayStartAssets, dayKey:dayKey, dayEquityPeak:dayEquityPeak, dayMaxDD:dayMaxDD, indexDayKey:indexDayKey, indexDayPrevClose:indexDayPrevClose, dayThemeId:dayThemeId, dayThemeDay:dayThemeDay, pathV:MM_PATH_V, sentiment:sentiment, points:points, purchasedPoints:purchasedPoints, activeTitle:activeTitle,
+      crashTimer:crashTimer, crashDone:crashDone, realized:realized, equityHist:equityHist, achv:achv, unlockedAch:unlockedAch, purchased:purchased, activeTheme:activeTheme, watchLimit:watchLimit, tradeLog:tradeLog, marketMode:marketMode, dayStartAssets:dayStartAssets, dayKey:dayKey, dayEquityPeak:dayEquityPeak, dayMaxDD:dayMaxDD, indexDayKey:indexDayKey, indexDayPrevClose:indexDayPrevClose, indexLevel:indexLevel, dayThemeId:dayThemeId, dayThemeDay:dayThemeDay, pathV:MM_PATH_V, sentiment:sentiment, points:points, purchasedPoints:purchasedPoints, activeTitle:activeTitle,
       stocks: stocks.map(function(s){
         var hist = s.hist.slice(-600).map(function(t){ return [t.o,t.h,t.l,t.c,t.v,t.ts]; });
         return { id:s.id, price:s.price, trend:s.trend, shortMean:s.shortMean, nextEarnings:(s.nextEarnings===Infinity?-1:s.nextEarnings), hist:hist };
@@ -1068,6 +1070,7 @@ function loadGame(){
     dayMaxDD = (typeof d.dayMaxDD === 'number') ? d.dayMaxDD : 0;
     indexDayKey = (typeof d.indexDayKey === 'number') ? d.indexDayKey : -1;
     indexDayPrevClose = (typeof d.indexDayPrevClose === 'number' && d.indexDayPrevClose > 0) ? d.indexDayPrevClose : 0;
+    indexLevel = (typeof d.indexLevel === 'number' && d.indexLevel > 0) ? d.indexLevel : (indexDayPrevClose || 1000);
     dayThemeId = d.dayThemeId || null;
     dayThemeDay = (typeof d.dayThemeDay === 'number') ? d.dayThemeDay : -1;
     sentiment = (typeof d.sentiment === 'number') ? Math.max(0, Math.min(100, d.sentiment)) : 50;
@@ -1095,7 +1098,8 @@ function loadGame(){
     }
     var dkey = gameDayIndex();
     if(!(indexDayPrevClose > 0) || indexDayKey !== dkey){
-      indexDayPrevClose = marketIndex();
+      indexLevel = marketIndexRaw();
+      indexDayPrevClose = indexLevel;
     }
     indexDayKey = dkey;
     if(Object.keys(sectorMomentum).length===0){ sectorList.forEach(function(sec){ sectorMomentum[sec]=0; }); }
@@ -1146,6 +1150,7 @@ function init(){
     lastEodShare = '';
     indexDayKey = -1;
     indexDayPrevClose = 1000;
+    indexLevel = 1000;
     dayThemeId = null;
     dayThemeDay = -1;
     sentiment = 50;
@@ -1163,7 +1168,7 @@ function init(){
     DIFF_VOL = 1; DIFF_TREND = 1; marketVol = 1;
     for(var i=0;i<INIT_HIST;i++){
       clockSeconds = baseT - INIT_HIST + i;
-      marketDev = marketIndex()/1000 - 1;
+      marketDev = marketIndexRaw()/1000 - 1;
       stocks.forEach(function(s){ stepStock(s,0); });
       syncIndexBar();
     }
@@ -1171,7 +1176,8 @@ function init(){
     stocks.forEach(function(s){ prevPrices[s.id] = s.price; });
     clockSeconds = baseT;
     indexDayKey = gameDayIndex();
-    indexDayPrevClose = marketIndex();
+    indexLevel = marketIndexRaw();
+    indexDayPrevClose = indexLevel;
     pickDayTheme(true);
     var _th = getDayTheme();
     if(_th){
@@ -1182,8 +1188,8 @@ function init(){
   normalizeHoldings();
   try { LANG = localStorage.getItem('mm_lang') || 'zh'; } catch(e){ LANG = 'zh'; }
   $('btnLang').textContent = (LANG==='en' ? '中文' : 'EN');
-  gameSpeed = 4;
-  try { localStorage.setItem('mm_speed', '4'); } catch(e){}
+  gameSpeed = 2;
+  try { localStorage.setItem('mm_speed', '2'); } catch(e){}
   try { favs = JSON.parse(localStorage.getItem('mm_favs') || '{}'); } catch(e){ favs = {}; }
   try { openSectors = JSON.parse(localStorage.getItem('mm_open') || '{}'); } catch(e){ openSectors = {}; }
   $('qty').value = '10';
@@ -1411,7 +1417,8 @@ function resetIndexDayBaseline(){
     presentEodReport(playerPct, indexPct, ddPct);
   }
   indexDayKey = d;
-  indexDayPrevClose = marketIndex();
+  indexLevel = marketIndexRaw();
+  indexDayPrevClose = indexLevel;
   // New session equity baseline
   dayStartAssets = totalAssets();
   dayKey = String(d);
@@ -1439,7 +1446,7 @@ function tick(){
     if(news.length>8) news.pop();
   }
   marketVol = Math.max(1.0, Math.min(3.8, marketVol));
-  marketDev = marketIndex()/1000 - 1;
+  marketDev = marketIndexRaw()/1000 - 1;
   var shock = 0;
   var shockSector = null;
   if(Math.random() < 0.07){
@@ -1458,7 +1465,7 @@ function tick(){
     if(pool.length){
       var gs = pool[Math.floor(Math.random()*pool.length)];
       // Sometimes a whole-sector storm; else single-name extreme candle
-      var sectorStorm = Math.random() < 0.28;
+      var sectorStorm = Math.random() < 0.16;
       var gapMag = 0.06 + Math.random()*0.14; // 6%–20%
       if(Math.random() < 0.12) gapMag = 0.18 + Math.random()*0.17; // rare 18%–35% nuke/moon
       var gap = (Math.random()<0.48?1:-1)*gapMag;
@@ -1474,7 +1481,7 @@ function tick(){
         var sec = gs.sector;
         stocks.forEach(function(s){
           if(s.sector!==sec) return;
-          var g2 = gap * (0.55 + Math.random()*0.7);
+          var g2 = gap * 0.65 * (0.55 + Math.random()*0.7); // damp sector-wide index impact; single-name gaps unchanged
           applyExtreme(s, g2);
         });
         news.unshift({time:clockStr(), text: sec+(gap>0?' 板块极端拉升':' 板块极端跳水')+' ~'+fmt(Math.abs(gap)*100,0)+'%', textEn: sec+(gap>0?' sector spike ~':' sector dump ~')+fmt(Math.abs(gap)*100,0)+'%', good:gap>0});
@@ -1635,7 +1642,7 @@ function totalAssets(){
   });
   return t;
 }
-function marketIndex(){
+function marketIndexRaw(){
   var sum = 0, n = 0;
   stocks.forEach(function(s){
     if(isAssetSector(s.sector)) return;
@@ -1643,6 +1650,24 @@ function marketIndex(){
     n++;
   });
   return n>0 ? (sum / n) * 1000 : 1000;
+}
+/** Displayed index: tracks a beta-scaled share of the equity basket day move (keeps header day-% in low single digits). */
+function marketIndex(){
+  return indexLevel;
+}
+function updateIndexLevel(){
+  var raw = marketIndexRaw();
+  var open = indexDayPrevClose > 0 ? indexDayPrevClose : raw;
+  // Target = day-open + beta * (raw basket − open)
+  var target = open + INDEX_DAY_BETA * (raw - open);
+  indexLevel += (target - indexLevel) * 0.4;
+  // Soft cap rare blowups: hard clamp ±8% day
+  var pct = open > 0 ? (indexLevel - open) / open : 0;
+  if(pct > 0.08) indexLevel = open * 1.08;
+  else if(pct < -0.08) indexLevel = open * 0.92;
+  else if(pct > 0.05) indexLevel = open + (indexLevel - open) * 0.85;
+  else if(pct < -0.05) indexLevel = open + (indexLevel - open) * 0.85;
+  return indexLevel;
 }
 function rebuildIndexHist(){
   var idx = null;
@@ -1677,12 +1702,28 @@ function rebuildIndexHist(){
     idx.hist.push({o:prev, h:Math.max(prev,c), l:Math.min(prev,c), c:c, v:sumV, ts:ts});
   }
   if(idx.hist.length > HIST_CAP) idx.hist = idx.hist.slice(-HIST_CAP);
+  if(idx.hist.length){
+    var open0 = idx.hist[0].c;
+    var prev = open0;
+    for(var hi=0; hi<idx.hist.length; hi++){
+      var rawC = idx.hist[hi].c;
+      var dampC = open0 + INDEX_DAY_BETA * (rawC - open0);
+      // compress path continuity
+      dampC = prev + (dampC - prev) * 0.85;
+      idx.hist[hi].o = prev;
+      idx.hist[hi].c = dampC;
+      idx.hist[hi].h = Math.max(prev, dampC);
+      idx.hist[hi].l = Math.min(prev, dampC);
+      prev = dampC;
+    }
+    indexLevel = prev;
+  }
   idx.price = idx.hist.length ? idx.hist[idx.hist.length-1].c : marketIndex();
 }
 function syncIndexBar(){
   stocks.forEach(function(s){
     if(s.sector!=='指数') return;
-    var ip = marketIndex();
+    var ip = updateIndexLevel();
     var vol = 0;
     stocks.forEach(function(x){
       if(isAssetSector(x.sector)) return;
@@ -2604,9 +2645,9 @@ function startGame(){
   gameTimer = setInterval(tick, Math.max(125, Math.round(TICK_MS / gameSpeed)));
 }
 function setSpeed(s){
-  // Speed locked at 4x — ignore UI/calls
-  gameSpeed = 4;
-  try { localStorage.setItem('mm_speed', '4'); } catch(e){}
+  // Speed locked at 2x — ignore UI/calls
+  gameSpeed = 2;
+  try { localStorage.setItem('mm_speed', '2'); } catch(e){}
   startGame();
 }
 function normalizeHoldings(){
