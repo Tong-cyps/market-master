@@ -412,6 +412,18 @@ canvas#chart { height: calc(100vh - 188px); min-height: 440px; }
     <button id="btnSaveShare" class="share-btn" data-i18n="save_img">保存图片</button>
   </div>
 </div>
+<div id="eodModal" class="modal" style="display:none">
+  <div class="modal-card" style="text-align:center">
+    <div class="modal-head" style="justify-content:center"><span data-i18n="eod_title">日终结算</span></div>
+    <div id="eodResult" style="font-size:20px;font-weight:800;margin:10px 0"></div>
+    <div id="eodStats" style="font-size:13px;color:#94a3b8;line-height:1.7;margin-bottom:12px"></div>
+    <div id="eodShare" style="background:#0b1220;border:1px solid #1e293b;border-radius:10px;padding:10px 12px;font-size:13px;color:#e2e8f0;margin-bottom:14px;word-break:break-word"></div>
+    <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+      <button id="btnEodCopy" class="fs-btn" data-i18n="eod_copy">复制分享</button>
+      <button id="btnEodClose" class="acct-reset" data-i18n="eod_continue" style="margin:0">继续交易</button>
+    </div>
+  </div>
+</div>
 <div id="bankruptModal" class="modal" style="display:none">
   <div class="modal-card" style="text-align:center">
     <div class="bk-icon">💸</div>
@@ -561,6 +573,7 @@ var I18N = {
   day_theme:['今日主题','Today\'s Theme'],
   theme_sector_only:['非今日主题板块，无法开仓','Not a today\'s theme sector — cannot open'],
   sentiment:['市场情绪','Sentiment'], fear:['恐慌','Fear'], greed:['贪婪','Greed'],
+  eod_title:['日终结算','End of Day'], eod_continue:['继续交易','Continue'], eod_copy:['复制分享','Copy'], eod_copied:['已复制','Copied'], eod_beat:['跑赢大盘','Beat the index'], eod_lose:['跑输大盘','Trailed the index'], eod_flat:['持平大盘','Matched the index'],
   cover:['平空','Cover'],
   close_pos:['平仓','Close'],
   trade_log:['交易记录','Trade Log'], no_trades:['暂无交易记录','No trades yet'],
@@ -685,6 +698,9 @@ function updateModeSel(){
 var bankruptShown = false;
 var dayStartAssets = START_CASH;
 var dayKey = '';
+var dayEquityPeak = START_CASH;
+var dayMaxDD = 0; // most negative day drawdown %
+var lastEodShare = '';
 var SECONDS_PER_DAY = 86400;
 var indexDayKey = -1;
 var indexDayPrevClose = 1000;
@@ -968,7 +984,7 @@ function saveGame(){
       sectorMomentum:sectorMomentum, marketVol:marketVol, divTimer:divTimer, rotateTimer:rotateTimer,
       orderId:orderId, optId:optId, selected:selected, timeframeKey:timeframeKey,
       posMode:posMode, tradeMode:tradeMode, leverage:leverage, condType:condType, optType:optType, optExp:optExp,
-      crashTimer:crashTimer, crashDone:crashDone, realized:realized, equityHist:equityHist, achv:achv, unlockedAch:unlockedAch, purchased:purchased, activeTheme:activeTheme, watchLimit:watchLimit, tradeLog:tradeLog, marketMode:marketMode, dayStartAssets:dayStartAssets, dayKey:dayKey, indexDayKey:indexDayKey, indexDayPrevClose:indexDayPrevClose, dayThemeId:dayThemeId, dayThemeDay:dayThemeDay, sentiment:sentiment, points:points, purchasedPoints:purchasedPoints, activeTitle:activeTitle,
+      crashTimer:crashTimer, crashDone:crashDone, realized:realized, equityHist:equityHist, achv:achv, unlockedAch:unlockedAch, purchased:purchased, activeTheme:activeTheme, watchLimit:watchLimit, tradeLog:tradeLog, marketMode:marketMode, dayStartAssets:dayStartAssets, dayKey:dayKey, dayEquityPeak:dayEquityPeak, dayMaxDD:dayMaxDD, indexDayKey:indexDayKey, indexDayPrevClose:indexDayPrevClose, dayThemeId:dayThemeId, dayThemeDay:dayThemeDay, sentiment:sentiment, points:points, purchasedPoints:purchasedPoints, activeTitle:activeTitle,
       stocks: stocks.map(function(s){
         var hist = s.hist.slice(-600).map(function(t){ return [t.o,t.h,t.l,t.c,t.v,t.ts]; });
         return { id:s.id, price:s.price, trend:s.trend, shortMean:s.shortMean, nextEarnings:(s.nextEarnings===Infinity?-1:s.nextEarnings), hist:hist };
@@ -1005,6 +1021,8 @@ function loadGame(){
     crashDone = !!d.crashDone;
     dayStartAssets = d.dayStartAssets || START_CASH;
     dayKey = d.dayKey || '';
+    dayEquityPeak = (typeof d.dayEquityPeak === 'number' && d.dayEquityPeak > 0) ? d.dayEquityPeak : dayStartAssets;
+    dayMaxDD = (typeof d.dayMaxDD === 'number') ? d.dayMaxDD : 0;
     indexDayKey = (typeof d.indexDayKey === 'number') ? d.indexDayKey : -1;
     indexDayPrevClose = (typeof d.indexDayPrevClose === 'number' && d.indexDayPrevClose > 0) ? d.indexDayPrevClose : 0;
     dayThemeId = d.dayThemeId || null;
@@ -1071,6 +1089,9 @@ function init(){
     setMode('normal');
     dayStartAssets = START_CASH;
     dayKey = '';
+    dayEquityPeak = START_CASH;
+    dayMaxDD = 0;
+    lastEodShare = '';
     indexDayKey = -1;
     indexDayPrevClose = 1000;
     dayThemeId = null;
@@ -1247,12 +1268,97 @@ function renderThemeBar(){
     hint.textContent = (LANG==='en'?' · Tradeable ':' · 可交易 ') + play + ' ('+themePlaySectors().length+')';
   }
 }
+/** Knife 4: track intraday equity peak / max drawdown. */
+function trackDayEquity(assets){
+  if(!(dayEquityPeak > 0)) dayEquityPeak = assets;
+  if(assets > dayEquityPeak) dayEquityPeak = assets;
+  if(dayEquityPeak > 0){
+    var dd = (assets - dayEquityPeak) / dayEquityPeak * 100;
+    if(dd < dayMaxDD) dayMaxDD = dd;
+  }
+}
+/** Knife 4: build share one-liner (zh/en). */
+function buildEodShareLine(beat, alphaPct, playerPct, indexPct, ddPct){
+  var a = (alphaPct>=0?'+':'') + fmt(alphaPct,1) + '%';
+  var dd = (Math.abs(ddPct) < 0.05) ? '0%' : (fmt(ddPct,1) + '%');
+  if(LANG==='en'){
+    if(beat > 0) return 'Beat the index '+a+' today, max drawdown '+dd;
+    if(beat < 0) return 'Trailed the index '+a+' today, max drawdown '+dd;
+    return 'Matched the index today ('+((playerPct>=0?'+':'')+fmt(playerPct,1))+'%), max drawdown '+dd;
+  }
+  if(beat > 0) return '今日跑赢大盘 '+a+'，最大回撤 '+dd;
+  if(beat < 0) return '今日跑输大盘 '+a+'，最大回撤 '+dd;
+  return '今日持平大盘 '+((playerPct>=0?'+':'')+fmt(playerPct,1))+'%，最大回撤 '+dd;
+}
+/** Knife 4: present end-of-day report for the day that just closed. */
+function presentEodReport(playerPct, indexPct, ddPct){
+  var alpha = playerPct - indexPct;
+  var beat = alpha > 0.05 ? 1 : (alpha < -0.05 ? -1 : 0);
+  var share = buildEodShareLine(beat, alpha, playerPct, indexPct, ddPct);
+  lastEodShare = share;
+  var res = $('eodResult');
+  var stats = $('eodStats');
+  var sh = $('eodShare');
+  if(res){
+    res.textContent = beat>0 ? t('eod_beat') : (beat<0 ? t('eod_lose') : t('eod_flat'));
+    res.style.color = beat>0 ? '#4ade80' : (beat<0 ? '#f87171' : '#e2e8f0');
+  }
+  if(stats){
+    stats.innerHTML =
+      (LANG==='en'?'You ':'你 ') + '<b class="'+(playerPct>=0?'up':'down')+'">'+(playerPct>=0?'+':'')+fmt(playerPct,2)+'%</b>' +
+      ' · ' + (LANG==='en'?'Index ':'大盘 ') + '<b class="'+(indexPct>=0?'up':'down')+'">'+(indexPct>=0?'+':'')+fmt(indexPct,2)+'%</b>' +
+      '<br>' + (LANG==='en'?'Max drawdown ':'最大回撤 ') + '<b class="down">'+fmt(ddPct,2)+'%</b>';
+  }
+  if(sh) sh.textContent = share;
+  var modal = $('eodModal');
+  if(modal) modal.style.display = 'flex';
+}
+function copyEodShare(){
+  var text = lastEodShare || (($('eodShare') && $('eodShare').textContent) || '');
+  if(!text) return;
+  function ok(){ toast(t('eod_copied')); }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(ok).catch(function(){
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text; document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); document.body.removeChild(ta); ok();
+      } catch(e){}
+    });
+  } else {
+    try {
+      var ta2 = document.createElement('textarea');
+      ta2.value = text; document.body.appendChild(ta2); ta2.select();
+      document.execCommand('copy'); document.body.removeChild(ta2); ok();
+    } catch(e){}
+  }
+}
+function closeEodModal(){
+  var modal = $('eodModal');
+  if(modal) modal.style.display = 'none';
+}
 function resetIndexDayBaseline(){
   // Snapshot before this tick's price moves → prior session close
   var d = gameDayIndex();
   if(d === indexDayKey) return false;
+  // Knife 4: EOD report for the day that just ended (skip first open)
+  if(indexDayKey >= 0){
+    var endAssets = totalAssets();
+    var startA = dayStartAssets > 0 ? dayStartAssets : endAssets;
+    var playerPct = startA > 0 ? (endAssets - startA) / startA * 100 : 0;
+    var idxOpen = indexDayPrevClose > 0 ? indexDayPrevClose : marketIndex();
+    var idxNow = marketIndex();
+    var indexPct = idxOpen > 0 ? (idxNow - idxOpen) / idxOpen * 100 : 0;
+    var ddPct = dayMaxDD; // already negative or 0
+    presentEodReport(playerPct, indexPct, ddPct);
+  }
   indexDayKey = d;
   indexDayPrevClose = marketIndex();
+  // New session equity baseline
+  dayStartAssets = totalAssets();
+  dayKey = String(d);
+  dayEquityPeak = dayStartAssets;
+  dayMaxDD = 0;
   if(pickDayTheme(true)){
     var th = getDayTheme();
     if(th){
@@ -1366,8 +1472,10 @@ function tick(){
     }
   }
   checkLiquidation();
-  equityHist.push(totalAssets());
+  var _eq = totalAssets();
+  equityHist.push(_eq);
   if(equityHist.length > 600) equityHist.shift();
+  trackDayEquity(_eq);
   saveTimer++;
   if(saveTimer>=10){ saveTimer=0; saveGame(); }
   render();
@@ -2417,10 +2525,12 @@ function updateDaily(){
   var key = String(gameDayIndex());
   if(!dayKey) dayKey = key;
   if(dayKey !== key){
+    // Day roll normally handled in resetIndexDayBaseline (EOD modal); keep fallback sync
     dayKey = key;
     dayStartAssets = totalAssets();
+    dayEquityPeak = dayStartAssets;
+    dayMaxDD = 0;
     saveGame();
-    toast('📅 ' + (LANG==='en'?'Daily settlement!':'每日结算！'));
   }
   var daily = totalAssets() - dayStartAssets;
   var dpct = dayStartAssets > 0 ? daily/dayStartAssets*100 : 0;
@@ -2561,6 +2671,8 @@ $('btnRestart').addEventListener('click', function(){
   localStorage.removeItem('mm_save');
   location.reload();
 });
+$('btnEodClose').addEventListener('click', closeEodModal);
+$('btnEodCopy').addEventListener('click', copyEodShare);
 document.querySelectorAll('.mode-btn').forEach(function(b){
   b.addEventListener('click', function(){
     setMode(b.getAttribute('data-mode'));
