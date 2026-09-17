@@ -519,24 +519,26 @@ var DIV_TICKS = 900;
 var divTimer = DIV_TICKS;
 var marketVol = 1.45;
 // Harder game: higher vol, longer trends, occasional extreme candles (works on loaded saves too)
-var DIFF_VOL = 3.1;
-var DIFF_TREND = 1.6; // was 3.8 — long AR trends caused marathon one-way candles
+var DIFF_VOL = 2.4; // was 3.1 — slightly cooler so bars chop both ways
+var DIFF_TREND = 1.0; // was 1.6 — further cut AR trend lock
+var MM_PATH_V = 2; // path schema: bump discards old marathon hist on load
 var extremeCool = 0;
 var FICTIONAL_YEAR = 1929;
 var sectorMomentum = {};
+var themeMomTarget = {}; // soft expected drift per sector (hot+/cold-); actual momentum mean-reverts+noise each tick
 var sectorList = [];
 var ROTATE_TICKS = 600;
 var rotateTimer = ROTATE_TICKS;
 // Daily market narrative theme (not UI shop theme)
 var DAY_THEMES = [
-  {id:'tech_strong', zh:'科技偏强', en:'Tech strength', hot:['科技','半导体','新能源'], cold:['银行','公用事业','地产'], bias:0.00018},
-  {id:'risk_off', zh:'风险偏好下降', en:'Risk appetite down', hot:['公用事业','银行','食品饮料','贵金属'], cold:['虚拟货币','娱乐游戏','半导体'], bias:0.00018},
-  {id:'energy_warm', zh:'能源回暖', en:'Energy rebound', hot:['能源','新能源','工业'], cold:['消费','零售','电商'], bias:0.00017},
-  {id:'fin_pressure', zh:'金融承压', en:'Financials under pressure', hot:['科技','消费','医药'], cold:['金融','银行','地产'], bias:0.00017},
-  {id:'consumer_up', zh:'消费回暖', en:'Consumer rebound', hot:['消费','食品饮料','零售','电商'], cold:['能源','军工'], bias:0.00016},
-  {id:'risk_on', zh:'风险偏好上升', en:'Risk-on', hot:['虚拟货币','半导体','娱乐游戏','新能源'], cold:['公用事业','银行'], bias:0.00018},
-  {id:'defense_bid', zh:'军工活跃', en:'Defense bid', hot:['军工','工业','通信'], cold:['地产','零售'], bias:0.00016},
-  {id:'health_strong', zh:'医药偏强', en:'Healthcare bid', hot:['医药','生物科技'], cold:['能源','航空'], bias:0.00017}
+  {id:'tech_strong', zh:'科技偏强', en:'Tech strength', hot:['科技','半导体','新能源'], cold:['银行','公用事业','地产'], bias:0.0001},
+  {id:'risk_off', zh:'风险偏好下降', en:'Risk appetite down', hot:['公用事业','银行','食品饮料','贵金属'], cold:['虚拟货币','娱乐游戏','半导体'], bias:0.0001},
+  {id:'energy_warm', zh:'能源回暖', en:'Energy rebound', hot:['能源','新能源','工业'], cold:['消费','零售','电商'], bias:0.0001},
+  {id:'fin_pressure', zh:'金融承压', en:'Financials under pressure', hot:['科技','消费','医药'], cold:['金融','银行','地产'], bias:0.0001},
+  {id:'consumer_up', zh:'消费回暖', en:'Consumer rebound', hot:['消费','食品饮料','零售','电商'], cold:['能源','军工'], bias:0.0001},
+  {id:'risk_on', zh:'风险偏好上升', en:'Risk-on', hot:['虚拟货币','半导体','娱乐游戏','新能源'], cold:['公用事业','银行'], bias:0.0001},
+  {id:'defense_bid', zh:'军工活跃', en:'Defense bid', hot:['军工','工业','通信'], cold:['地产','零售'], bias:0.0001},
+  {id:'health_strong', zh:'医药偏强', en:'Healthcare bid', hot:['医药','生物科技'], cold:['能源','航空'], bias:0.0001}
 ];
 var dayThemeId = null;
 var dayThemeDay = -1;
@@ -832,7 +834,7 @@ var stocks = rawStocks.map(function(r, i){
   var drift = (Math.random()-0.5)*0.000008;
   var eps = r[2] / (sectorPE[r[1]] || 20);
   var divYield = sectorDiv[r[1]] || 0.01;
-  return { id:'S'+(i+1), name:r[0], sector:r[1], basePrice:r[2], price:r[2], drift:drift, vol:vol, eps:eps, divYield:divYield, hist:[], nextEarnings:0, trend:0, trendVol:vol*0.14, shortMean:r[2], meanRev:0.0032 };
+  return { id:'S'+(i+1), name:r[0], sector:r[1], basePrice:r[2], price:r[2], drift:drift, vol:vol, eps:eps, divYield:divYield, hist:[], nextEarnings:0, trend:0, trendVol:vol*0.14, shortMean:r[2], meanRev:0.0055 };
 });
 
 function $(id){ return document.getElementById(id); }
@@ -871,16 +873,62 @@ function getStock(id){
   for(var i=0;i<stocks.length;i++){ if(stocks[i].id===id) return stocks[i]; }
   return stocks[0];
 }
+
+/** Theme momentum: decay + noise each tick so hot/cold stay readable without direction-lock. */
+function tickSectorMomentum(){
+  sectorList.forEach(function(sec){
+    var target = (themeMomTarget[sec] !== undefined) ? themeMomTarget[sec] : 0;
+    var m = sectorMomentum[sec] || 0;
+    m = m * 0.82 + target * 0.18 + randn() * 0.00014;
+    if(m > 0.00032) m = 0.00032;
+    if(m < -0.00032) m = -0.00032;
+    sectorMomentum[sec] = m;
+  });
+}
+/** Path schema migration / fresh hist: rebuild candles with current stepStock dynamics. */
+function regeneratePathHist(){
+  var savedClock = clockSeconds;
+  stocks.forEach(function(s){
+    s.hist = [];
+    s.trend = 0;
+    s.shortMean = s.price;
+    s.signStreak = 0;
+  });
+  var _dv = DIFF_VOL, _dt = DIFF_TREND, _mv = marketVol;
+  // Seed with current (v2) dynamics at mild amp so chart is usable immediately
+  DIFF_VOL = Math.min(DIFF_VOL, 1.5);
+  DIFF_TREND = Math.min(DIFF_TREND, 1.0);
+  marketVol = 1.05;
+  for(var i=0;i<INIT_HIST;i++){
+    clockSeconds = savedClock - INIT_HIST + i;
+    tickSectorMomentum();
+    marketDev = marketIndex()/1000 - 1;
+    stocks.forEach(function(s){ stepStock(s, 0); });
+  }
+  DIFF_VOL = _dv; DIFF_TREND = _dt; marketVol = _mv;
+  clockSeconds = savedClock;
+  rebuildIndexHist();
+}
 function stepStock(s, shock){
   if(s.sector==='指数') return;
   var oldP = s.price;
-  s.trend = s.trend * 0.94 + (s.trendVol || 0) * DIFF_TREND * randn(); // was 0.991 — shorter half-life so bars flip
-  s.shortMean = s.shortMean * 0.997 + s.price * 0.003;
+  s.trend = s.trend * 0.90 + (s.trendVol || 0) * DIFF_TREND * randn(); // was 0.94 — faster flip
+  s.shortMean = s.shortMean * 0.996 + s.price * 0.004;
   var meanRev = ((s.shortMean - s.price) / s.price) * s.meanRev;
-  var baseRev = ((s.basePrice - s.price) / s.price) * 0.00055;
+  var baseRev = ((s.basePrice - s.price) / s.price) * 0.0007;
   var beginner = equityHist.length < 25;
-  // Knife3 hook: +sentimentDrift (from news sentiment, subtle — not a difficulty spike)
+  // Knife3 hook: +sentimentDrift (subtle). Theme bias arrives via noisy sectorMomentum (not a sticky addend).
   var ret = s.drift + ((s.trend + meanRev*modeMeanRev + s.vol*DIFF_VOL*randn()) * marketVol * (beginner?0.88:1)) + baseRev + modeDrift + sentimentDrift + (sectorMomentum[s.sector]||0) + (shock||0) - marketDev * 0.0009;
+  // Hard fade after 4 same-sign 1s returns — kills marathon one-way ticks
+  if(typeof s.signStreak !== 'number') s.signStreak = 0;
+  if(ret > 0){ s.signStreak = s.signStreak > 0 ? s.signStreak + 1 : 1; }
+  else if(ret < 0){ s.signStreak = s.signStreak < 0 ? s.signStreak - 1 : -1; }
+  else { s.signStreak = 0; }
+  if(Math.abs(s.signStreak) >= 4){
+    ret -= (s.signStreak > 0 ? 1 : -1) * (0.0012 + Math.random()*0.0018);
+    s.trend *= 0.35;
+    s.signStreak = 0;
+  }
   var newP = Math.max(0.5, oldP*(1+ret));
   s.price = newP;
   var v = Math.round((200 + Math.random()*1200) * (1 + Math.abs(ret)*40));
@@ -979,7 +1027,7 @@ function saveGame(){
       sectorMomentum:sectorMomentum, marketVol:marketVol, divTimer:divTimer, rotateTimer:rotateTimer,
       orderId:orderId, optId:optId, selected:selected, timeframeKey:timeframeKey,
       posMode:posMode, tradeMode:tradeMode, leverage:leverage, condType:condType, optType:optType, optExp:optExp,
-      crashTimer:crashTimer, crashDone:crashDone, realized:realized, equityHist:equityHist, achv:achv, unlockedAch:unlockedAch, purchased:purchased, activeTheme:activeTheme, watchLimit:watchLimit, tradeLog:tradeLog, marketMode:marketMode, dayStartAssets:dayStartAssets, dayKey:dayKey, dayEquityPeak:dayEquityPeak, dayMaxDD:dayMaxDD, indexDayKey:indexDayKey, indexDayPrevClose:indexDayPrevClose, dayThemeId:dayThemeId, dayThemeDay:dayThemeDay, sentiment:sentiment, points:points, purchasedPoints:purchasedPoints, activeTitle:activeTitle,
+      crashTimer:crashTimer, crashDone:crashDone, realized:realized, equityHist:equityHist, achv:achv, unlockedAch:unlockedAch, purchased:purchased, activeTheme:activeTheme, watchLimit:watchLimit, tradeLog:tradeLog, marketMode:marketMode, dayStartAssets:dayStartAssets, dayKey:dayKey, dayEquityPeak:dayEquityPeak, dayMaxDD:dayMaxDD, indexDayKey:indexDayKey, indexDayPrevClose:indexDayPrevClose, dayThemeId:dayThemeId, dayThemeDay:dayThemeDay, pathV:MM_PATH_V, sentiment:sentiment, points:points, purchasedPoints:purchasedPoints, activeTitle:activeTitle,
       stocks: stocks.map(function(s){
         var hist = s.hist.slice(-600).map(function(t){ return [t.o,t.h,t.l,t.c,t.v,t.ts]; });
         return { id:s.id, price:s.price, trend:s.trend, shortMean:s.shortMean, nextEarnings:(s.nextEarnings===Infinity?-1:s.nextEarnings), hist:hist };
@@ -1027,15 +1075,24 @@ function loadGame(){
     prevPrices = {}; priceDir = {}; prevIdx = 1000;
     sectorList = [];
     stocks.forEach(function(s){ if(sectorList.indexOf(s.sector)<0) sectorList.push(s.sector); });
+    var pathStale = (d.pathV !== MM_PATH_V);
     (d.stocks||[]).forEach(function(sd){
       var s = getStock(sd.id);
       if(!s) return;
-      s.price = sd.price; s.trend = sd.trend; s.shortMean = sd.shortMean;
+      s.price = sd.price; s.trend = pathStale ? 0 : sd.trend; s.shortMean = pathStale ? sd.price : sd.shortMean;
       s.nextEarnings = (sd.nextEarnings===-1 ? Infinity : sd.nextEarnings);
-      s.hist = (sd.hist||[]).map(function(t){ return {o:t[0],h:t[1],l:t[2],c:t[3],v:t[4],ts:t[5]}; });
+      s.signStreak = 0;
+      if(pathStale){ s.hist = []; }
+      else { s.hist = (sd.hist||[]).map(function(t){ return {o:t[0],h:t[1],l:t[2],c:t[3],v:t[4],ts:t[5]}; }); }
       prevPrices[s.id] = s.price;
     });
-    rebuildIndexHist();
+    if(pathStale){
+      // Auto-migrate: drop marathon old candles; rebuild with v2 path logic
+      applyDayThemeBias();
+      regeneratePathHist();
+    } else {
+      rebuildIndexHist();
+    }
     var dkey = gameDayIndex();
     if(!(indexDayPrevClose > 0) || indexDayKey !== dkey){
       indexDayPrevClose = marketIndex();
@@ -1155,15 +1212,22 @@ function getDayTheme(){
 function applyDayThemeBias(){
   var th = getDayTheme();
   if(!th) return;
-  // Mild theme edge (hot↑/cold↓ on average) — strong enough to feel, weak enough to chop both ways
-  var bias = th.bias || 0.00018;
+  // Soft expected edge only — actual sectorMomentum is mean-reverting+noisy each tick (see tickSectorMomentum)
+  var bias = Math.min(0.0001, th.bias || 0.0001);
+  themeMomTarget = {};
   (th.hot||[]).forEach(function(sec){
     if(sectorList.indexOf(sec)<0) return;
-    sectorMomentum[sec] = bias + Math.random()*0.00006;
+    themeMomTarget[sec] = bias;
+    sectorMomentum[sec] = bias * (0.4 + Math.random()*0.6);
   });
   (th.cold||[]).forEach(function(sec){
     if(sectorList.indexOf(sec)<0) return;
-    sectorMomentum[sec] = -bias - Math.random()*0.00006;
+    themeMomTarget[sec] = -bias;
+    sectorMomentum[sec] = -bias * (0.4 + Math.random()*0.6);
+  });
+  // Non-theme sectors gently revert toward 0
+  sectorList.forEach(function(sec){
+    if(themeMomTarget[sec] === undefined) themeMomTarget[sec] = 0;
   });
 }
 /** Knife 2: only 3–5 theme sectors are tradeable. */
@@ -1423,6 +1487,7 @@ function tick(){
     }
   }
   updateSentimentFromNews();
+    tickSectorMomentum();
   stocks.forEach(function(s){
     var sh = shock;
     if(shockSector && s.sector === shockSector) sh = shock * 3.0;
@@ -2219,7 +2284,8 @@ function renderMarketHtml(){
 }
 function rotateSectors(){
   sectorList.forEach(function(sec){
-    sectorMomentum[sec] = (Math.random()-0.5)*0.00028;
+    // Brief noise bump; theme targets re-applied so hot/cold stay readable without lock
+    sectorMomentum[sec] = (Math.random()-0.5)*0.0002;
   });
   applyDayThemeBias();
   syncThemeSectorUI();
