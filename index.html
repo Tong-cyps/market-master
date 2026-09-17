@@ -231,6 +231,15 @@ canvas#equityChart { width:100%; height:120px; margin-top:4px; }
 .theme-bar .theme-label { color:#8b93a7; flex:0 0 auto; }
 .theme-bar .theme-text { font-weight:700; color:#fbbf24; }
 .theme-bar .theme-hint { color:#64748b; font-size:11px; }
+.sent-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; background:#111827; border:1px solid #1e293b; border-radius:8px; padding:5px 12px; margin-bottom:8px; font-size:11px; }
+.sent-bar .sent-label { color:#8b93a7; flex:0 0 auto; }
+.sent-bar .sent-fear { color:#f87171; font-weight:600; }
+.sent-bar .sent-greed { color:#4ade80; font-weight:600; }
+.sent-meter { position:relative; flex:1 1 140px; min-width:120px; max-width:280px; height:8px; background:linear-gradient(90deg,#7f1d1d 0%,#334155 50%,#14532d 100%); border-radius:4px; overflow:visible; }
+.sent-fill { position:absolute; left:0; top:0; bottom:0; width:50%; background:rgba(251,191,36,0.35); border-radius:4px; pointer-events:none; }
+.sent-needle { position:absolute; top:-3px; width:3px; height:14px; margin-left:-1.5px; background:#fbbf24; border-radius:1px; left:50%; box-shadow:0 0 4px rgba(0,0,0,0.5); }
+.sent-val { font-weight:700; color:#e2e8f0; min-width:2.2em; text-align:right; font-variant-numeric:tabular-nums; }
+
 .sec-head.theme-dim { opacity:0.48; filter:grayscale(0.35); }
 .sec-head.theme-dim .sec-name { color:#94a3b8; }
 .sec-tag-on { margin-left:6px; font-size:10px; color:#fbbf24; font-weight:600; }
@@ -288,6 +297,7 @@ canvas#chart { height: calc(100vh - 188px); min-height: 440px; }
     <div class="ticker-track" id="tickerTrack"></div>
   </div>
   <div class="theme-bar" id="themeBar"><span class="theme-label" data-i18n="day_theme">今日主题</span><span class="theme-text" id="themeText">—</span><span class="theme-hint" id="themeHint"></span></div>
+  <div class="sent-bar" id="sentBar"><span class="sent-label" data-i18n="sentiment">市场情绪</span><span class="sent-fear" data-i18n="fear">恐慌</span><div class="sent-meter" title="Fear ←→ Greed"><div class="sent-fill" id="sentFill"></div><div class="sent-needle" id="sentNeedle"></div></div><span class="sent-greed" data-i18n="greed">贪婪</span><span class="sent-val" id="sentVal">50</span></div>
   <div class="rotate-bar" id="rotateBar"></div>
   <div class="layout">
     <div class="col-chart">
@@ -523,6 +533,9 @@ var DAY_THEMES = [
 ];
 var dayThemeId = null;
 var dayThemeDay = -1;
+// Knife 3: fear/greed 0–100; sentimentDrift lightly tilts stepStock ret
+var sentiment = 50;
+var sentimentDrift = 0;
 
 var LANG = 'zh';
 var I18N = {
@@ -547,6 +560,7 @@ var I18N = {
   brand_sub:['实时行情 · 虚拟资金 · 模拟游戏 · 不构成投资建议','Real-time · Virtual funds · Simulation · Not investment advice'],
   day_theme:['今日主题','Today\'s Theme'],
   theme_sector_only:['非今日主题板块，无法开仓','Not a today\'s theme sector — cannot open'],
+  sentiment:['市场情绪','Sentiment'], fear:['恐慌','Fear'], greed:['贪婪','Greed'],
   cover:['平空','Cover'],
   close_pos:['平仓','Close'],
   trade_log:['交易记录','Trade Log'], no_trades:['暂无交易记录','No trades yet'],
@@ -854,7 +868,8 @@ function stepStock(s, shock){
   var meanRev = ((s.shortMean - s.price) / s.price) * s.meanRev;
   var baseRev = ((s.basePrice - s.price) / s.price) * 0.00035;
   var beginner = equityHist.length < 25;
-  var ret = s.drift + ((s.trend + meanRev*modeMeanRev + s.vol*DIFF_VOL*randn()) * marketVol * (beginner?0.88:1)) + baseRev + modeDrift + (sectorMomentum[s.sector]||0) + (shock||0) - marketDev * 0.0009;
+  // Knife3 hook: +sentimentDrift (from news sentiment, subtle — not a difficulty spike)
+  var ret = s.drift + ((s.trend + meanRev*modeMeanRev + s.vol*DIFF_VOL*randn()) * marketVol * (beginner?0.88:1)) + baseRev + modeDrift + sentimentDrift + (sectorMomentum[s.sector]||0) + (shock||0) - marketDev * 0.0009;
   var newP = Math.max(0.5, oldP*(1+ret));
   s.price = newP;
   var v = Math.round((200 + Math.random()*1200) * (1 + Math.abs(ret)*40));
@@ -953,7 +968,7 @@ function saveGame(){
       sectorMomentum:sectorMomentum, marketVol:marketVol, divTimer:divTimer, rotateTimer:rotateTimer,
       orderId:orderId, optId:optId, selected:selected, timeframeKey:timeframeKey,
       posMode:posMode, tradeMode:tradeMode, leverage:leverage, condType:condType, optType:optType, optExp:optExp,
-      crashTimer:crashTimer, crashDone:crashDone, realized:realized, equityHist:equityHist, achv:achv, unlockedAch:unlockedAch, purchased:purchased, activeTheme:activeTheme, watchLimit:watchLimit, tradeLog:tradeLog, marketMode:marketMode, dayStartAssets:dayStartAssets, dayKey:dayKey, indexDayKey:indexDayKey, indexDayPrevClose:indexDayPrevClose, dayThemeId:dayThemeId, dayThemeDay:dayThemeDay, points:points, purchasedPoints:purchasedPoints, activeTitle:activeTitle,
+      crashTimer:crashTimer, crashDone:crashDone, realized:realized, equityHist:equityHist, achv:achv, unlockedAch:unlockedAch, purchased:purchased, activeTheme:activeTheme, watchLimit:watchLimit, tradeLog:tradeLog, marketMode:marketMode, dayStartAssets:dayStartAssets, dayKey:dayKey, indexDayKey:indexDayKey, indexDayPrevClose:indexDayPrevClose, dayThemeId:dayThemeId, dayThemeDay:dayThemeDay, sentiment:sentiment, points:points, purchasedPoints:purchasedPoints, activeTitle:activeTitle,
       stocks: stocks.map(function(s){
         var hist = s.hist.slice(-600).map(function(t){ return [t.o,t.h,t.l,t.c,t.v,t.ts]; });
         return { id:s.id, price:s.price, trend:s.trend, shortMean:s.shortMean, nextEarnings:(s.nextEarnings===Infinity?-1:s.nextEarnings), hist:hist };
@@ -994,6 +1009,8 @@ function loadGame(){
     indexDayPrevClose = (typeof d.indexDayPrevClose === 'number' && d.indexDayPrevClose > 0) ? d.indexDayPrevClose : 0;
     dayThemeId = d.dayThemeId || null;
     dayThemeDay = (typeof d.dayThemeDay === 'number') ? d.dayThemeDay : -1;
+    sentiment = (typeof d.sentiment === 'number') ? Math.max(0, Math.min(100, d.sentiment)) : 50;
+    sentimentDrift = ((sentiment - 50) / 50) * 0.00006;
     prevPrices = {}; priceDir = {}; prevIdx = 1000;
     sectorList = [];
     stocks.forEach(function(s){ if(sectorList.indexOf(s.sector)<0) sectorList.push(s.sector); });
@@ -1058,6 +1075,8 @@ function init(){
     indexDayPrevClose = 1000;
     dayThemeId = null;
     dayThemeDay = -1;
+    sentiment = 50;
+    sentimentDrift = 0;
     stocks.forEach(function(s){
       s.price = s.basePrice;
       s.trend = 0;
@@ -1184,6 +1203,38 @@ function pickDayTheme(force){
   syncThemeSectorUI();
   return true;
 }
+/** Knife 3: update fear/greed from recent news; mild mean-revert to 50; set sentimentDrift. */
+function updateSentimentFromNews(){
+  var recent = news.slice(0, 6);
+  var newsPull = 50;
+  if(recent.length){
+    var wsum = 0, vsum = 0;
+    for(var i=0;i<recent.length;i++){
+      var w = 1 - i * 0.12;
+      wsum += w;
+      vsum += (recent[i].good ? 1 : -1) * w;
+    }
+    var avg = vsum / (wsum || 1); // ~-1..1
+    newsPull = 50 + avg * 32;
+  }
+  sentiment += (newsPull - sentiment) * 0.14;
+  sentiment += (50 - sentiment) * 0.035; // mild mean-revert
+  if(sentiment < 0) sentiment = 0;
+  if(sentiment > 100) sentiment = 100;
+  // Subtle tilt into stepStock (max |drift| ≈ 0.00006, below modeDrift bull/bear)
+  sentimentDrift = ((sentiment - 50) / 50) * 0.00006;
+}
+function renderSentimentBar(){
+  var fill = $('sentFill');
+  var needle = $('sentNeedle');
+  var val = $('sentVal');
+  if(!val) return;
+  var s = Math.round(sentiment);
+  val.textContent = String(s);
+  if(fill) fill.style.width = s + '%';
+  if(needle) needle.style.left = s + '%';
+  val.style.color = s >= 58 ? '#4ade80' : (s <= 42 ? '#f87171' : '#e2e8f0');
+}
 function renderThemeBar(){
   var el = $('themeText');
   var hint = $('themeHint');
@@ -1271,6 +1322,7 @@ function tick(){
       extremeCool = 12 + Math.floor(Math.random()*28);
     }
   }
+  updateSentimentFromNews();
   stocks.forEach(function(s){
     var sh = shock;
     if(shockSector && s.sector === shockSector) sh = shock * 3.0;
@@ -1578,6 +1630,7 @@ function render(){
   var hotTxt = rs.slice(0,2).map(function(x){ return sectName(x)+' '+fmt(sectorMomentum[x]*100,2)+'%'; }).join(' · ');
   var coldTxt = rs.slice(-2).reverse().map(function(x){ return sectName(x)+' '+fmt(sectorMomentum[x]*100,2)+'%'; }).join(' · ');
   renderThemeBar();
+  renderSentimentBar();
   $('rotateBar').innerHTML = '<span class="up">🔥 '+t('hot')+' '+hotTxt+'</span>　<span class="down">❄ '+t('cold')+' '+coldTxt+'</span>';
 
   $('stockList').innerHTML = renderMarketHtml();
