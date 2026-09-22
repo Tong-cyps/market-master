@@ -694,6 +694,8 @@ var ACH = [
 var achv = {trades:0,wins:0,shortWin:false,option:false,lev:false,long:false,short:false,div:false,crypto:false,forex:false,metals:false};
 var unlockedAch = {};
 var tradeLog = [];
+var dayFees = 0; // Knife5: commissions paid this game-day (EOD share)
+// Knife5: commission=max($0.50, 5bps*notional); half-spread equities 5bps / crypto·FX·metals 10bps
 var newsSectors = {};
 var marketDev = 0;
 var marketMode = 'normal';
@@ -962,6 +964,26 @@ function stepStock(s, shock){
   s.hist.push({o:newP, h:newP, l:newP, c:newP, v:v, ts:clockSeconds});
   if(s.hist.length > HIST_CAP){ s.hist.shift(); }
 }
+/** Knife5: half-spread — equities 5bps; crypto/FX/metals 10bps (index not traded). */
+function halfSpread(sec){
+  // Mirror isAssetSector (ex-index): crypto/FX/metals slightly wider
+  if(sec==='虚拟货币' || sec==='外汇' || sec==='贵金属') return 0.0010;
+  return 0.0005;
+}
+/** buy→ask, sell→bid */
+function fillPrice(mid, side, sec){
+  var h = halfSpread(sec);
+  return side==='buy' ? mid * (1+h) : mid * (1-h);
+}
+/** Commission: max($0.50, 5bps of notional) */
+function commissionFee(notional){
+  return Math.max(0.5, Math.abs(notional) * 0.0005);
+}
+function chargeFee(fee){
+  if(!(fee>0)) return;
+  cash -= fee;
+  dayFees += fee;
+}
 function addLong(id, qty, price, lev){
   var h = holdings[id];
   var L = lev || 1;
@@ -984,9 +1006,12 @@ function closeLong(id, qty, price){
   if(before < qty) return false;
   var released = h.longMargin * (qty/before);
   var pl = (price - h.longEntry) * qty;
-  realized.push(pl);
-  if(pl > 0){ achv.wins++; var earned = Math.floor(pl * POINTS_PER_DOLLAR); points += earned; }
-  tradeLog.unshift({t:clockStr(), n:getStock(id).name, side:'long', qty:qty, entry:h.longEntry, exit:price, pl:pl});
+  var fee = commissionFee(price * qty);
+  var net = pl - fee;
+  realized.push(net);
+  if(net > 0){ achv.wins++; var earned = Math.floor(net * POINTS_PER_DOLLAR); points += earned; }
+  chargeFee(fee);
+  tradeLog.unshift({t:clockStr(), n:getStock(id).name, side:'long', qty:qty, entry:h.longEntry, exit:price, pl:net, fee:fee});
   if(tradeLog.length>50) tradeLog.pop();
   cash += released + pl;
   h.long = before - qty;
@@ -1000,9 +1025,12 @@ function closeShort(id, qty, price){
   if(before < qty) return false;
   var released = h.shortMargin * (qty/before);
   var pl = (h.shortEntry - price) * qty;
-  realized.push(pl);
-  if(pl > 0){ achv.wins++; achv.shortWin = true; var earned2 = Math.floor(pl * POINTS_PER_DOLLAR); points += earned2; }
-  tradeLog.unshift({t:clockStr(), n:getStock(id).name, side:'short', qty:qty, entry:h.shortEntry, exit:price, pl:pl});
+  var fee = commissionFee(price * qty);
+  var net = pl - fee;
+  realized.push(net);
+  if(net > 0){ achv.wins++; achv.shortWin = true; var earned2 = Math.floor(net * POINTS_PER_DOLLAR); points += earned2; }
+  chargeFee(fee);
+  tradeLog.unshift({t:clockStr(), n:getStock(id).name, side:'short', qty:qty, entry:h.shortEntry, exit:price, pl:net, fee:fee});
   if(tradeLog.length>50) tradeLog.pop();
   cash += released + pl;
   h.short = before - qty;
@@ -1053,7 +1081,7 @@ function saveGame(){
       sectorMomentum:sectorMomentum, marketVol:marketVol, divTimer:divTimer, rotateTimer:rotateTimer,
       orderId:orderId, optId:optId, selected:selected, timeframeKey:timeframeKey,
       posMode:posMode, tradeMode:tradeMode, leverage:leverage, condType:condType, optType:optType, optExp:optExp,
-      crashTimer:crashTimer, crashDone:crashDone, realized:realized, equityHist:equityHist, achv:achv, unlockedAch:unlockedAch, purchased:purchased, activeTheme:activeTheme, watchLimit:watchLimit, tradeLog:tradeLog, marketMode:marketMode, dayStartAssets:dayStartAssets, dayKey:dayKey, dayEquityPeak:dayEquityPeak, dayMaxDD:dayMaxDD, indexDayKey:indexDayKey, indexDayPrevClose:indexDayPrevClose, indexLevel:indexLevel, dayThemeId:dayThemeId, dayThemeDay:dayThemeDay, pathV:MM_PATH_V, sentiment:sentiment, points:points, purchasedPoints:purchasedPoints, activeTitle:activeTitle,
+      crashTimer:crashTimer, crashDone:crashDone, realized:realized, equityHist:equityHist, achv:achv, unlockedAch:unlockedAch, purchased:purchased, activeTheme:activeTheme, watchLimit:watchLimit, tradeLog:tradeLog, marketMode:marketMode, dayStartAssets:dayStartAssets, dayKey:dayKey, dayEquityPeak:dayEquityPeak, dayMaxDD:dayMaxDD, indexDayKey:indexDayKey, indexDayPrevClose:indexDayPrevClose, indexLevel:indexLevel, dayThemeId:dayThemeId, dayThemeDay:dayThemeDay, pathV:MM_PATH_V, dayFees:dayFees, sentiment:sentiment, points:points, purchasedPoints:purchasedPoints, activeTitle:activeTitle,
       stocks: stocks.map(function(s){
         var hist = s.hist.slice(-600).map(function(t){ return [t.o,t.h,t.l,t.c,t.v,t.ts]; });
         return { id:s.id, price:s.price, trend:s.trend, shortMean:s.shortMean, nextEarnings:(s.nextEarnings===Infinity?-1:s.nextEarnings), hist:hist };
@@ -1082,6 +1110,7 @@ function loadGame(){
     activeTheme = d.activeTheme || 'default';
     watchLimit = d.watchLimit || 3;
     tradeLog = d.tradeLog || [];
+    dayFees = (typeof d.dayFees === 'number' && d.dayFees > 0) ? d.dayFees : 0;
     points = d.points || 0;
     purchasedPoints = d.purchasedPoints || {};
     activeTitle = d.activeTitle || '';
@@ -1163,6 +1192,7 @@ function init(){
     activeTheme = 'default';
     watchLimit = 3;
     tradeLog = [];
+    dayFees = 0;
     points = 0;
     purchasedPoints = {};
     activeTitle = '';
@@ -1383,6 +1413,9 @@ function presentEodReport(playerPct, indexPct, ddPct){
   var alpha = playerPct - indexPct;
   var beat = alpha > 0.05 ? 1 : (alpha < -0.05 ? -1 : 0);
   var share = buildEodShareLine(beat, alpha, playerPct, indexPct, ddPct);
+  if(dayFees > 0.005){
+    share += (LANG==='en' ? (' · Fees $'+fmt(dayFees,2)) : (' · 今日手续费 $'+fmt(dayFees,2)));
+  }
   lastEodShare = share;
   var res = $('eodResult');
   var stats = $('eodStats');
@@ -1448,6 +1481,7 @@ function resetIndexDayBaseline(){
   dayKey = String(d);
   dayEquityPeak = dayStartAssets;
   dayMaxDD = 0;
+  dayFees = 0;
   if(pickDayTheme(true)){
     var th = getDayTheme();
     if(th){
@@ -1610,15 +1644,21 @@ function buy(){
   if(posMode==='long'){
     if(!isThemeTradeSector(s.sector)){ toast(t('theme_sector_only')); return; }
     if(SECTOR_UNLOCK[s.sector] && totalAssets() < SECTOR_UNLOCK[s.sector]){ toast((LANG==='en'?'Unlock at $':'解锁需 $')+fmt(SECTOR_UNLOCK[s.sector],0)); return; }
-    var margin = q*s.price/leverage;
-    if(margin > cash + 0.0001){ toast(t('insuff_funds')); return; }
+    var px = fillPrice(s.price, 'buy', s.sector);
+    var notional = q*px;
+    var fee = commissionFee(notional);
+    var margin = notional/leverage;
+    if(margin + fee > cash + 0.0001){ toast(t('insuff_funds')); return; }
     cash -= margin;
-    addLong(s.id, q, s.price, leverage);
-    toast(t('buy') + ' ' + q + ' ' + t('shares') + ' (' + leverage + 'x)');
+    chargeFee(fee);
+    addLong(s.id, q, px, leverage);
+    toast(t('buy') + ' ' + q + ' @ $' + fmt(px) + ' · ' + (LANG==='en'?'fee $':'费 $') + fmt(fee) + ' (' + leverage + 'x)');
   } else {
     if(h.short < q){ toast(t('no_short')); return; }
-    closeShort(s.id, q, s.price);
-    toast(t('cover') + ' ' + q + ' ' + t('shares'));
+    var pxC = fillPrice(s.price, 'buy', s.sector);
+    closeShort(s.id, q, pxC);
+    var feeC = (tradeLog[0] && tradeLog[0].fee) ? tradeLog[0].fee : 0;
+    toast(t('cover') + ' ' + q + ' @ $' + fmt(pxC) + ' · ' + (LANG==='en'?'fee $':'费 $') + fmt(feeC));
   }
   achv.trades++;
   if(posMode==='long') achv.long = true;
@@ -1634,16 +1674,22 @@ function sell(){
   var h = holdings[s.id];
   if(posMode==='long'){
     if(h.long < q){ toast(t('no_holdings')); return; }
-    closeLong(s.id, q, s.price);
-    toast(t('sell') + ' ' + q + ' ' + t('shares'));
+    var px = fillPrice(s.price, 'sell', s.sector);
+    closeLong(s.id, q, px);
+    var feeS = (tradeLog[0] && tradeLog[0].fee) ? tradeLog[0].fee : 0;
+    toast(t('sell') + ' ' + q + ' @ $' + fmt(px) + ' · ' + (LANG==='en'?'fee $':'费 $') + fmt(feeS));
   } else {
     if(!isThemeTradeSector(s.sector)){ toast(t('theme_sector_only')); return; }
     if(SECTOR_UNLOCK[s.sector] && totalAssets() < SECTOR_UNLOCK[s.sector]){ toast((LANG==='en'?'Unlock at $':'解锁需 $')+fmt(SECTOR_UNLOCK[s.sector],0)); return; }
-    var margin = q*s.price/leverage;
-    if(margin > cash + 0.0001){ toast(t('insuff_funds')); return; }
+    var pxSh = fillPrice(s.price, 'sell', s.sector);
+    var notional = q*pxSh;
+    var fee = commissionFee(notional);
+    var margin = notional/leverage;
+    if(margin + fee > cash + 0.0001){ toast(t('insuff_funds')); return; }
     cash -= margin;
-    addShort(s.id, q, s.price, leverage);
-    toast(t('short') + ' ' + q + ' ' + t('shares') + ' (' + leverage + 'x)');
+    chargeFee(fee);
+    addShort(s.id, q, pxSh, leverage);
+    toast(t('short') + ' ' + q + ' @ $' + fmt(pxSh) + ' · ' + (LANG==='en'?'fee $':'费 $') + fmt(fee) + ' (' + leverage + 'x)');
   }
   achv.trades++;
   if(posMode==='short') achv.short = true;
@@ -1838,7 +1884,7 @@ function render(){
   else {
     tradeLog.forEach(function(lg){
       tlHtml += '<div class="order-row"><span class="badge '+(lg.side==='long'?'buy':'sell')+'">'+(lg.side==='long'?t('long_badge'):t('short_badge'))+'</span>'
-        + '<span>'+(lg.liq?'💥 ':'')+lg.n+' '+lg.qty+' '+t('shares')+'</span>'
+        + '<span>'+(lg.liq?'💥 ':'')+lg.n+' '+lg.qty+' '+t('shares')+(lg.fee?(' · '+(LANG==='en'?'fee $':'费 $')+fmt(lg.fee)):'')+'</span>'
         + '<span class="nday">'+lg.t+'</span>'
         + '<span class="'+(lg.pl>=0?'up':'down')+'">'+(lg.pl>=0?'+':'')+'$'+fmt(lg.pl)+'</span></div>';
     });
@@ -2441,9 +2487,10 @@ function closePosition(id, side){
   var h = holdings[id];
   var q = side==='long' ? h.long : h.short;
   if(q<=0) return;
-  if(side==='long'){ closeLong(id, q, s.price); }
-  else { closeShort(id, q, s.price); }
-  toast(t('close_pos') + ' ' + q + ' ' + t('shares'));
+  if(side==='long'){ closeLong(id, q, fillPrice(s.price, 'sell', s.sector)); }
+  else { closeShort(id, q, fillPrice(s.price, 'buy', s.sector)); }
+  var feeX = (tradeLog[0] && tradeLog[0].fee) ? tradeLog[0].fee : 0;
+  toast(t('close_pos') + ' ' + q + ' ' + t('shares') + ' · ' + (LANG==='en'?'fee $':'费 $') + fmt(feeX));
   render();
 }
 var guideStep = 0;
@@ -2466,12 +2513,12 @@ function checkLiquidation(){
   stocks.forEach(function(s){
     var h = holdings[s.id];
     if(h.long > 0 && (h.longEntry - s.price) * h.long >= h.longMargin){
-      closeLong(s.id, h.long, s.price);
+      closeLong(s.id, h.long, fillPrice(s.price, 'sell', s.sector));
       if(tradeLog[0]) tradeLog[0].liq = true;
       toast('💥 ' + s.name + (LANG==='en'?' LIQUIDATED':' 爆仓'));
     }
     if(h.short > 0 && (s.price - h.shortEntry) * h.short >= h.shortMargin){
-      closeShort(s.id, h.short, s.price);
+      closeShort(s.id, h.short, fillPrice(s.price, 'buy', s.sector));
       if(tradeLog[0]) tradeLog[0].liq = true;
       toast('💥 ' + s.name + (LANG==='en'?' LIQUIDATED':' 爆仓'));
     }
